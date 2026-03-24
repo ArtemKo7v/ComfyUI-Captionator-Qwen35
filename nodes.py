@@ -1,4 +1,4 @@
-class CaptionatorTestNode:
+class CaptionatorQwen35:
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -17,9 +17,9 @@ class CaptionatorTestNode:
 
 
 NODE_CLASS_MAPPINGS = {
-    "CaptionatorTestNode": CaptionatorTestNode,
+    "CaptionatorQwen35": CaptionatorQwen35,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "CaptionatorTestNode": "Captionator Test",
+    "CaptionatorQwen35": "CaptionatorQwen35",
 }
