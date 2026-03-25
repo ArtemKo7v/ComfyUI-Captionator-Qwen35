@@ -6,6 +6,9 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
+import numpy as np
+from PIL import Image
+
 import folder_paths
 
 try:
@@ -67,21 +70,33 @@ def _ensure_model(model_path: Path) -> Tuple[Any, Any]:
         return cached
 
     tokenizer = AutoTokenizer.from_pretrained(str(model_dir), trust_remote_code=True, local_files_only=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        str(model_dir), trust_remote_code=True, local_files_only=True
+    model_kwargs: Dict[str, Any] = dict(
+        trust_remote_code=True,
+        local_files_only=True,
+        low_cpu_mem_usage=True,
     )
+    if _DEVICE and _DEVICE.type == "cuda":
+        model_kwargs.update(
+            dict(
+                device_map="auto",
+                torch_dtype=torch.float16,
+            )
+        )
+    else:
+        model_kwargs.update(device_map="cpu")
+
+    model = AutoModelForCausalLM.from_pretrained(str(model_dir), **model_kwargs)
     model = model.eval()
-    if _DEVICE:
-        model = model.to(_DEVICE)
 
     _MODEL_CACHE[key] = (tokenizer, model)
     return tokenizer, model
 
 
 def _prepare_prompt(image, prompt: str) -> str:
-    info = f"{image.width}x{image.height} ({image.mode})"
+    pil_image = _ensure_pil_image(image)
+    info = f"{pil_image.width}x{pil_image.height} ({pil_image.mode})"
     buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
+    pil_image.save(buffer, format="PNG")
     image_b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
     return (
         "Image metadata: "
@@ -105,6 +120,38 @@ def _generate_text(tokenizer: Any, model: Any, prompt: str) -> str:
         )
 
     return tokenizer.decode(output[0], skip_special_tokens=True)
+
+
+def _ensure_pil_image(image: Any) -> Image.Image:
+    if isinstance(image, Image.Image):
+        return image
+
+    if isinstance(image, dict) and "image" in image:
+        return _ensure_pil_image(image["image"])
+
+    if torch is not None and isinstance(image, torch.Tensor):
+        tensor = image.detach().cpu()
+        if tensor.ndim == 4 and tensor.shape[0] == 1:
+            tensor = tensor[0]
+        array = tensor.numpy()
+        if array.ndim == 3 and array.shape[0] in (1, 3, 4) and array.shape[-1] not in (1, 3, 4):
+            array = np.transpose(array, (1, 2, 0))
+        array = np.clip(array, 0.0, 1.0)
+        array = (array * 255.0).astype(np.uint8)
+        return Image.fromarray(array)
+
+    if isinstance(image, np.ndarray):
+        array = image
+        if array.ndim == 4 and array.shape[0] == 1:
+            array = array[0]
+        if array.ndim == 3 and array.shape[0] in (1, 3, 4) and array.shape[-1] not in (1, 3, 4):
+            array = np.transpose(array, (1, 2, 0))
+        if array.dtype != np.uint8:
+            array = np.clip(array, 0.0, 1.0)
+            array = (array * 255.0).astype(np.uint8)
+        return Image.fromarray(array)
+
+    raise TypeError(f"Unsupported image type: {type(image)}")
 
 
 class CaptionatorQwen35:
