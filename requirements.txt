@@ -1,0 +1,2 @@
+sentencepiece>=0.1.99
+tiktoken>=0.4.0

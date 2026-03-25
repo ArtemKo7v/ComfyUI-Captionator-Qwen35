@@ -1,0 +1,58 @@
+# ComfyUI Captionator Qwen3.5
+
+Simple ComfyUI custom node for running multimodal Qwen3.5 image captioning.
+
+## Node
+
+- Name: `CaptionatorQwen35`
+- Category: `Captionator`
+- Input image: `IMAGE`
+- Output text: `STRING`
+
+## Features
+
+- Scans `models/text_encoders`, `models/llm`, and `models/LLM` using `folder_paths`
+- Loads local Qwen3.5 checkpoints
+- Sends both image and prompt to the model
+- Supports `seed`
+- Supports `think` mode
+- Supports optional resize via `resize_to`
+- Supports configurable output length via `max_new_tokens`
+
+## Installation
+
+Place this folder into your ComfyUI `custom_nodes` directory.
+
+Install dependencies in the same Python environment used by ComfyUI:
+
+```bash
+pip install -r requirements.txt
+```
+
+You also need a `transformers` build with Qwen3.5 support, plus the model files themselves.
+
+## Model placement
+
+Put your Qwen3.5 model in one of these folders:
+
+- `ComfyUI/models/text_encoders`
+- `ComfyUI/models/llm`
+- `ComfyUI/models/LLM`
+
+The model directory should include the checkpoint and the usual Hugging Face files such as config, tokenizer, and processor files.
+
+## Inputs
+
+- `image`: input image
+- `model`: model selected from discovered `.safetensors` files
+- `prompt`: instruction for the model
+- `resize_to`: longest image side before inference; `0` disables resizing
+- `max_new_tokens`: maximum number of generated output tokens
+- `seed`: random seed for reproducible sampling
+- `think`: enables thinking mode when supported by the installed processor
+
+## Notes
+
+- Restart ComfyUI after changing code or installing dependencies.
+- If `think` is not supported by your installed processor version, the node falls back automatically.
+- Large images and large token counts can increase VRAM use.
