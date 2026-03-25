@@ -52,6 +52,9 @@ def _list_qwen35_models() -> Iterable[str]:
             continue
 
         for path in sorted(model_dir.rglob("*.safetensors")):
+            path_text = path.as_posix().lower()
+            if "qwen" not in path_text or "3" not in path_text or "5" not in path_text:
+                continue
             try:
                 models.append(path.relative_to(BASE_PATH).as_posix())
             except ValueError:
@@ -249,7 +252,7 @@ class CaptionatorQwen35:
             "required": {
                 "image": ("IMAGE",),
                 "model": (_list_qwen35_models(),),
-                "prompt": ("STRING", {"default": "Describe this image in detail."}),
+                "prompt": ("STRING", {"default": "Describe this image in detail.", "multiline": True}),
                 "resize_to": ("INT", {"default": 0, "min": 0, "max": 4096, "step": IMAGE_FACTOR}),
                 "max_new_tokens": ("INT", {"default": 256, "min": 1, "max": 8192, "step": 1}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0x7FFFFFFFFFFFFFFF}),

@@ -47,7 +47,7 @@ The model directory should include the checkpoint and the usual Hugging Face fil
 
 - `image`: input image
 - `model`: model selected from discovered `.safetensors` files
-- `prompt`: instruction for the model
+- `prompt`: multiline instruction for the model
 - `resize_to`: longest image side before inference; `0` disables resizing
 - `max_new_tokens`: maximum number of generated output tokens
 - `seed`: random seed for reproducible sampling
@@ -63,3 +63,4 @@ The model directory should include the checkpoint and the usual Hugging Face fil
 - Restart ComfyUI after changing code or installing dependencies.
 - If `think` is not supported by your installed processor version, the node falls back automatically.
 - Large images and large token counts can increase VRAM use.
+- Model discovery only shows `.safetensors` paths containing `qwen`, `3`, and `5` (case-insensitive).
