@@ -236,6 +236,12 @@ def _generate_text(tokenizer: Any, model: Any, inputs: Dict[str, Any], seed: int
     return tokenizer.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0].strip()
 
 
+def _extract_caption(full_output: str, think: bool) -> str:
+    if think and "</think>" in full_output:
+        return full_output.split("</think>", 1)[1].strip()
+    return full_output.strip()
+
+
 class CaptionatorQwen35:
     @classmethod
     def INPUT_TYPES(cls):
@@ -251,30 +257,33 @@ class CaptionatorQwen35:
             }
         }
 
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("text",)
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("caption", "full_output")
     FUNCTION = "run"
     CATEGORY = "Captionator"
 
     def run(self, image, model, prompt, resize_to, max_new_tokens, seed, think):
         if model == _NO_MODEL_SENTINEL:
-            return ("Install a Qwen3.5 `.safetensors` with tokenizer + config in models/llm or models/text_encoders.",)
+            message = "Install a Qwen3.5 `.safetensors` with tokenizer + config in models/llm or models/text_encoders."
+            return (message, message)
 
         model_path = (BASE_PATH / model).resolve()
         try:
             processor, tokenizer, llm = _ensure_model(model_path)
         except Exception as exc:
             logging.exception("Failed to load qwen model", exc_info=exc)
-            return (f"Model load failed: {exc}",)
+            message = f"Model load failed: {exc}"
+            return (message, message)
 
         try:
             inputs = _prepare_inputs(processor, image, prompt, resize_to, think)
-            output = _generate_text(tokenizer, llm, inputs, seed, max_new_tokens)
+            full_output = _generate_text(tokenizer, llm, inputs, seed, max_new_tokens)
         except Exception as exc:
             logging.exception("Inference failure", exc_info=exc)
-            return (f"Inference failed: {exc}",)
+            return (f"Inference failed: {exc}", f"Inference failed: {exc}")
 
-        return (output.strip(),)
+        caption = _extract_caption(full_output, think)
+        return (caption, full_output.strip())
 
 
 NODE_CLASS_MAPPINGS = {

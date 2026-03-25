@@ -7,7 +7,8 @@ Simple ComfyUI custom node for running multimodal Qwen3.5 image captioning.
 - Name: `CaptionatorQwen35`
 - Category: `Captionator`
 - Input image: `IMAGE`
-- Output text: `STRING`
+- Output caption: `STRING`
+- Output full_output: `STRING`
 
 ## Features
 
@@ -18,6 +19,7 @@ Simple ComfyUI custom node for running multimodal Qwen3.5 image captioning.
 - Supports `think` mode
 - Supports optional resize via `resize_to`
 - Supports configurable output length via `max_new_tokens`
+- Splits visible caption from full reasoning output when `think` is enabled
 
 ## Installation
 
@@ -50,6 +52,11 @@ The model directory should include the checkpoint and the usual Hugging Face fil
 - `max_new_tokens`: maximum number of generated output tokens
 - `seed`: random seed for reproducible sampling
 - `think`: enables thinking mode when supported by the installed processor
+
+## Outputs
+
+- `caption`: final caption text; if `think` is enabled and the model returns `</think>`, everything up to and including that tag is removed
+- `full_output`: raw model output without trimming
 
 ## Notes
 
