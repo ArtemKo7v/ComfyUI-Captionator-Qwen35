@@ -246,10 +246,16 @@ def _extract_caption(full_output: str, think: bool) -> str:
 
 def _build_improver_prompt(original_prompt: str, has_image: bool, max_new_tokens: int) -> str:
     original_prompt = original_prompt.strip()
+    based_on_suffix = ""
+    if original_prompt:
+        based_on_suffix = " based on the original prompt"
+    elif has_image:
+        based_on_suffix = " based on the original image"
+
     parts = [""]
     if original_prompt:
         parts.append(f"Original prompt: {original_prompt}\n\n")
-    parts.append("TASK: Make a brief detailed prompt.\n\nINSTRUCTIONS:\n")
+    parts.append(f"TASK: Make a brief detailed prompt{based_on_suffix}.\n\nINSTRUCTIONS:\n")
     if original_prompt:
         parts.append("Use the specified original prompt as the main source of subjects and details.\n")
     if has_image:
