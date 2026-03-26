@@ -326,40 +326,41 @@ class CaptionImproverQwen35:
             },
         }
 
-    RETURN_TYPES = ("STRING", "STRING")
-    RETURN_NAMES = ("prompt", "full_output")
+    RETURN_TYPES = ("STRING", "STRING", "STRING")
+    RETURN_NAMES = ("prompt", "full_output", "instructions_prompt")
     FUNCTION = "run"
     CATEGORY = "Captionator"
 
     def run(self, model, prompt, resize_to, max_new_tokens, seed, think, image=None):
         if model == _NO_MODEL_SENTINEL:
             message = "Install a Qwen3.5 `.safetensors` with tokenizer + config in models/llm or models/text_encoders."
-            return (message, message)
+            return (message, message, message)
 
         original_prompt = prompt.strip()
         has_image = image is not None
         if not original_prompt and not has_image:
             message = "Provide an original prompt, an image, or both."
-            return (message, message)
+            return (message, message, message)
 
+        instruction = _build_improver_prompt(original_prompt, has_image, max_new_tokens)
         model_path = (BASE_PATH / model).resolve()
         try:
             processor, tokenizer, llm = _ensure_model(model_path)
         except Exception as exc:
             logging.exception("Failed to load qwen model", exc_info=exc)
             message = f"Model load failed: {exc}"
-            return (message, message)
+            return (message, message, instruction)
 
-        instruction = _build_improver_prompt(original_prompt, has_image, max_new_tokens)
         try:
             inputs = _prepare_inputs(processor, image, instruction, resize_to, think)
             full_output = _generate_text(tokenizer, llm, inputs, seed, max_new_tokens)
         except Exception as exc:
             logging.exception("Inference failure", exc_info=exc)
-            return (f"Inference failed: {exc}", f"Inference failed: {exc}")
+            message = f"Inference failed: {exc}"
+            return (message, message, instruction)
 
         improved_prompt = _extract_caption(full_output, think)
-        return (improved_prompt, full_output.strip())
+        return (improved_prompt, full_output.strip(), instruction)
 
 
 NODE_CLASS_MAPPINGS = {
