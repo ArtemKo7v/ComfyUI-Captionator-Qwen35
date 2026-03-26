@@ -180,21 +180,20 @@ def _ensure_pil_image(image: Any) -> Image.Image:
     raise TypeError(f"Unsupported image type: {type(image)}")
 
 
-def _build_messages(image: Image.Image, prompt: str) -> list[Dict[str, Any]]:
-    return [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": prompt.strip()},
-            ],
-        }
-    ]
+def _build_messages(image: Image.Image | None, prompt: str) -> list[Dict[str, Any]]:
+    content = []
+    if image is not None:
+        content.append({"type": "image", "image": image})
+    if prompt.strip():
+        content.append({"type": "text", "text": prompt.strip()})
+    return [{"role": "user", "content": content}]
 
 
-def _prepare_inputs(processor: Any, image: Any, prompt: str, resize_to: int, think: bool) -> Dict[str, Any]:
-    pil_image = _ensure_pil_image(image)
-    pil_image = _resize_to_limit(pil_image, resize_to)
+def _prepare_inputs(processor: Any, image: Any | None, prompt: str, resize_to: int, think: bool) -> Dict[str, Any]:
+    pil_image = None
+    if image is not None:
+        pil_image = _ensure_pil_image(image)
+        pil_image = _resize_to_limit(pil_image, resize_to)
     messages = _build_messages(pil_image, prompt)
     template_kwargs = dict(
         tokenize=True,
@@ -245,6 +244,23 @@ def _extract_caption(full_output: str, think: bool) -> str:
     return full_output.strip()
 
 
+def _build_improver_prompt(original_prompt: str, has_image: bool, max_new_tokens: int) -> str:
+    original_prompt = original_prompt.strip()
+    parts = ["Make a brief detailed prompt."]
+    if original_prompt:
+        parts.append("Use the specified original prompt as the main source of details.")
+    if has_image:
+        parts.append("Use the style and details from the attached image.")
+    if original_prompt and has_image:
+        parts.append("Original prompt is more important in details. Attached image is more important for style description.")
+    parts.append(
+        f"The result prompt should be in English language, be a single paragraph, and not exceed {max_new_tokens} tokens."
+    )
+    if original_prompt:
+        parts.append(f"\nOriginal prompt: {original_prompt}")
+    return " ".join(parts)
+
+
 class CaptionatorQwen35:
     @classmethod
     def INPUT_TYPES(cls):
@@ -289,10 +305,65 @@ class CaptionatorQwen35:
         return (caption, full_output.strip())
 
 
+class CaptionImproverQwen35:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": (_list_qwen35_models(),),
+                "prompt": ("STRING", {"default": "", "multiline": True}),
+                "resize_to": ("INT", {"default": 0, "min": 0, "max": 4096, "step": IMAGE_FACTOR}),
+                "max_new_tokens": ("INT", {"default": 256, "min": 1, "max": 8192, "step": 1}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0x7FFFFFFFFFFFFFFF}),
+                "think": ("BOOLEAN", {"default": False}),
+            },
+            "optional": {
+                "image": ("IMAGE",),
+            },
+        }
+
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("prompt", "full_output")
+    FUNCTION = "run"
+    CATEGORY = "Captionator"
+
+    def run(self, model, prompt, resize_to, max_new_tokens, seed, think, image=None):
+        if model == _NO_MODEL_SENTINEL:
+            message = "Install a Qwen3.5 `.safetensors` with tokenizer + config in models/llm or models/text_encoders."
+            return (message, message)
+
+        original_prompt = prompt.strip()
+        has_image = image is not None
+        if not original_prompt and not has_image:
+            message = "Provide an original prompt, an image, or both."
+            return (message, message)
+
+        model_path = (BASE_PATH / model).resolve()
+        try:
+            processor, tokenizer, llm = _ensure_model(model_path)
+        except Exception as exc:
+            logging.exception("Failed to load qwen model", exc_info=exc)
+            message = f"Model load failed: {exc}"
+            return (message, message)
+
+        instruction = _build_improver_prompt(original_prompt, has_image, max_new_tokens)
+        try:
+            inputs = _prepare_inputs(processor, image, instruction, resize_to, think)
+            full_output = _generate_text(tokenizer, llm, inputs, seed, max_new_tokens)
+        except Exception as exc:
+            logging.exception("Inference failure", exc_info=exc)
+            return (f"Inference failed: {exc}", f"Inference failed: {exc}")
+
+        improved_prompt = _extract_caption(full_output, think)
+        return (improved_prompt, full_output.strip())
+
+
 NODE_CLASS_MAPPINGS = {
     "CaptionatorQwen35": CaptionatorQwen35,
+    "CaptionImproverQwen35": CaptionImproverQwen35,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "CaptionatorQwen35": "CaptionatorQwen35",
+    "CaptionatorQwen35": "Image Captionator Qwen 3.5",
+    "CaptionImproverQwen35": "Caption Improver Qwen 3.5",
 }
