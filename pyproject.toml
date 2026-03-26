@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-captionator-qwen35"
-version = "0.1.0"
+version = "0.1.1"
 description = "ComfyUI Qwen 3.5 Prompting nodes (captionate image, improve prompt, etc)"
 authors = [{ name="ArtemKo7v" }]
 license = { text = "MIT" }
