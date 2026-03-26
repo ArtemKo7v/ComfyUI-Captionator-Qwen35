@@ -5,7 +5,7 @@ Simple ComfyUI custom node for running multimodal Qwen3.5 image captioning.
 ## Node
 
 - Name: `CaptionatorQwen35`
-- Name: `Caption Improver Qwen 3.5`
+- Description: `ComfyUI Qwen 3.5 Prompting nodes`
 - Category: `Captionator`
 - Input image: `IMAGE`
 - Output caption: `STRING`
