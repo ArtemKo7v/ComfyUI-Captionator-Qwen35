@@ -246,19 +246,23 @@ def _extract_caption(full_output: str, think: bool) -> str:
 
 def _build_improver_prompt(original_prompt: str, has_image: bool, max_new_tokens: int) -> str:
     original_prompt = original_prompt.strip()
-    parts = ["Make a brief detailed prompt."]
+    parts = [""]
     if original_prompt:
-        parts.append("Use the specified original prompt as the main source of details.")
+        parts.append(f"Original prompt: {original_prompt}\n\n")
+    parts.append("TASK: Make a brief detailed prompt.\n\nINSTRUCTIONS:\n")
+    if original_prompt:
+        parts.append("Use the specified original prompt as the main source of subjects and details.\n")
     if has_image:
-        parts.append("Use the style and details from the attached image.")
+        parts.append("Use the style and details from the attached image.\n")
     if original_prompt and has_image:
-        parts.append("Original prompt is more important in details. Attached image is more important for style description.")
+        parts.append(
+            "Original prompt is more important in details. Attached image is more important for style description. "
+            "If subjects in original prompt and image are conflicting, use subjects from original prompt.\n"
+        )
     parts.append(
         f"The result prompt should be in English language, be a single paragraph, and not exceed {max_new_tokens} tokens."
     )
-    if original_prompt:
-        parts.append(f"\nOriginal prompt: {original_prompt}")
-    return " ".join(parts)
+    return "".join(parts)
 
 
 class CaptionatorQwen35:
@@ -311,8 +315,8 @@ class CaptionImproverQwen35:
         return {
             "required": {
                 "model": (_list_qwen35_models(),),
-                "prompt": ("STRING", {"default": "", "multiline": True}),
-                "resize_to": ("INT", {"default": 0, "min": 0, "max": 4096, "step": IMAGE_FACTOR}),
+                "prompt": ("STRING", {"default": "Enter your prompt to improve here.", "multiline": True}),
+                "resize_to": ("INT", {"default": 512, "min": 0, "max": 4096, "step": IMAGE_FACTOR}),
                 "max_new_tokens": ("INT", {"default": 256, "min": 1, "max": 8192, "step": 1}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0x7FFFFFFFFFFFFFFF}),
                 "think": ("BOOLEAN", {"default": False}),
