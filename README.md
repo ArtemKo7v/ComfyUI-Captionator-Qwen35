@@ -68,8 +68,9 @@ The model directory should include the checkpoint and the usual Hugging Face fil
 - Output full_output: `STRING`
 - Output instructions_prompt: `STRING`
 - Reuses the same model, prompt, resize, token limit, seed, and think settings
+- Includes a mode dropdown to choose whether details/style come mainly from the prompt, the image, or both
 - Builds an instruction that improves the original prompt, optionally using the attached image for style/detail guidance
-- If both prompt and image are provided, the original prompt is prioritized for details and the image for style
+- If both prompt and image are provided, the selected mode controls which source has priority for details and style
 - Returns a single-paragraph English prompt and the raw model output
 
 ## Notes

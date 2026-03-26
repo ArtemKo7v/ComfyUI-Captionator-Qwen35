@@ -32,6 +32,11 @@ _DEVICE = torch.device("cuda" if torch and torch.cuda.is_available() else "cpu")
 _MODEL_CACHE: Dict[str, Tuple[Any, Any]] = {}
 _NO_MODEL_SENTINEL = "No .safetensors models found"
 IMAGE_FACTOR = 32
+IMPROVER_STYLE_SOURCE_MODES = (
+    "Details from prompt, style from image",
+    "Details from image, style from prompt",
+    "Merge prompt and image details and style",
+)
 
 
 def _model_dirs() -> Iterable[Path]:
@@ -244,10 +249,14 @@ def _extract_caption(full_output: str, think: bool) -> str:
     return full_output.strip()
 
 
-def _build_improver_prompt(original_prompt: str, has_image: bool, max_new_tokens: int) -> str:
+def _build_improver_prompt(
+    original_prompt: str, has_image: bool, max_new_tokens: int, style_source_mode: str
+) -> str:
     original_prompt = original_prompt.strip()
     based_on_suffix = ""
-    if original_prompt:
+    if original_prompt and has_image:
+        based_on_suffix = " based on the original prompt and attached image"
+    elif original_prompt:
         based_on_suffix = " based on the original prompt"
     elif has_image:
         based_on_suffix = " based on the original image"
@@ -256,15 +265,23 @@ def _build_improver_prompt(original_prompt: str, has_image: bool, max_new_tokens
     if original_prompt:
         parts.append(f"Original prompt: {original_prompt}\n\n")
     parts.append(f"TASK: Make a brief detailed prompt{based_on_suffix}.\n\nINSTRUCTIONS:\n")
-    if original_prompt:
-        parts.append("Use the specified original prompt as the main source of subjects and details.\n")
-    if has_image:
-        parts.append("Use the style and details from the attached image.\n")
     if original_prompt and has_image:
-        parts.append(
-            "Original prompt is more important in details. Attached image is more important for style description. "
-            "If subjects in original prompt and image are conflicting, use subjects from original prompt.\n"
-        )
+        if style_source_mode == IMPROVER_STYLE_SOURCE_MODES[0]:
+            parts.append("Use the original prompt as the main source of subjects and content details.\n")
+            parts.append("Use the attached image as the main source of visual style and stylistic details.\n")
+            parts.append("If the original prompt and image conflict, keep the subjects and core details from the original prompt.\n")
+        elif style_source_mode == IMPROVER_STYLE_SOURCE_MODES[1]:
+            parts.append("Use the attached image as the main source of subjects and content details.\n")
+            parts.append("Use the original prompt as the main source of style and stylistic cues.\n")
+            parts.append("If the original prompt and image conflict, keep the subjects and core details from the attached image.\n")
+        else:
+            parts.append("Merge the subjects, details, and style cues from both the original prompt and the attached image.\n")
+            parts.append("Combine them into one coherent prompt without repeating the same idea twice.\n")
+    else:
+        if original_prompt:
+            parts.append("Use the specified original prompt as the source of subjects, details, and style cues.\n")
+        if has_image:
+            parts.append("Use the attached image as the source of subjects, details, and style cues.\n")
     parts.append(
         f"The result prompt should be in English language, be a single paragraph, and not exceed {max_new_tokens} tokens."
     )
@@ -322,6 +339,7 @@ class CaptionImproverQwen35:
             "required": {
                 "model": (_list_qwen35_models(),),
                 "prompt": ("STRING", {"default": "Enter your prompt to improve here.", "multiline": True}),
+                "style_source_mode": (IMPROVER_STYLE_SOURCE_MODES,),
                 "resize_to": ("INT", {"default": 512, "min": 0, "max": 4096, "step": IMAGE_FACTOR}),
                 "max_new_tokens": ("INT", {"default": 256, "min": 1, "max": 8192, "step": 1}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0x7FFFFFFFFFFFFFFF}),
@@ -337,7 +355,7 @@ class CaptionImproverQwen35:
     FUNCTION = "run"
     CATEGORY = "Captionator"
 
-    def run(self, model, prompt, resize_to, max_new_tokens, seed, think, image=None):
+    def run(self, model, prompt, style_source_mode, resize_to, max_new_tokens, seed, think, image=None):
         if model == _NO_MODEL_SENTINEL:
             message = "Install a Qwen3.5 `.safetensors` with tokenizer + config in models/llm or models/text_encoders."
             return (message, message, message)
@@ -348,7 +366,7 @@ class CaptionImproverQwen35:
             message = "Provide an original prompt, an image, or both."
             return (message, message, message)
 
-        instruction = _build_improver_prompt(original_prompt, has_image, max_new_tokens)
+        instruction = _build_improver_prompt(original_prompt, has_image, max_new_tokens, style_source_mode)
         model_path = (BASE_PATH / model).resolve()
         try:
             processor, tokenizer, llm = _ensure_model(model_path)
