@@ -60,6 +60,16 @@ The model directory should include the checkpoint and the usual Hugging Face fil
 - `caption`: final caption text; if `think` is enabled and the model returns `</think>`, everything up to and including that tag is removed
 - `full_output`: raw model output without trimming
 
+## Usage Examples
+
+Simple workflow:
+
+![Captionator simple workflow](images/example01.png)
+
+Image -> prompt -> image workflow for Z-Image:
+
+![Captionator Z-Image workflow](images/example02.png)
+
 ## Caption Improver
 
 - Name: `Caption Improver Qwen 3.5`
@@ -72,6 +82,10 @@ The model directory should include the checkpoint and the usual Hugging Face fil
 - Builds an instruction that improves the original prompt, optionally using the attached image for style/detail guidance
 - If both prompt and image are provided, the selected mode controls which source has priority for details and style
 - Returns a single-paragraph English prompt and the raw model output
+
+Prompt Improver workflow example:
+
+![Caption Improver workflow](images/example03.png)
 
 ## Notes
 
