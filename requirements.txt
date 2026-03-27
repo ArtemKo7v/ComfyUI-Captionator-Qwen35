@@ -1,4 +1,8 @@
-accelerate>=0.34.0
+accelerate>=1.13.0
+bitsandbytes>=0.48.0
 huggingface_hub>=0.34.0
+protobuf>=5.0.0
+safetensors>=0.4.3
 sentencepiece>=0.1.99
 tiktoken>=0.4.0
+transformers>=5.2.0
