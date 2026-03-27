@@ -9,6 +9,10 @@ import numpy as np
 from PIL import Image
 
 import folder_paths
+try:
+    from huggingface_hub import snapshot_download
+except ImportError:  # pragma: no cover
+    snapshot_download = None  # type: ignore[assignment]
 
 try:
     import torch
@@ -30,13 +34,17 @@ except ImportError:  # pragma: no cover
 BASE_PATH = Path(folder_paths.base_path)
 _DEVICE = torch.device("cuda" if torch and torch.cuda.is_available() else "cpu") if torch else None
 _MODEL_CACHE: Dict[str, Tuple[Any, Any]] = {}
-_NO_MODEL_SENTINEL = "No .safetensors models found"
 IMAGE_FACTOR = 32
 IMPROVER_STYLE_SOURCE_MODES = (
     "Details from prompt, style from image",
     "Details from image, style from prompt",
     "Merge prompt and image details and style",
 )
+DOWNLOADABLE_QWEN35_MODELS = {
+    "[Download] Qwen 3.5 2B": ("Qwen/Qwen3.5-2B", "Qwen3.5-2B"),
+    "[Download] Qwen 3.5 4B": ("Qwen/Qwen3.5-4B", "Qwen3.5-4B"),
+    "[Download] Qwen 3.5 9B": ("Qwen/Qwen3.5-9B", "Qwen3.5-9B"),
+}
 
 
 def _model_dirs() -> Iterable[Path]:
@@ -65,7 +73,37 @@ def _list_qwen35_models() -> Iterable[str]:
             except ValueError:
                 models.append(path.as_posix())
 
-    return models or [_NO_MODEL_SENTINEL]
+    return models or list(DOWNLOADABLE_QWEN35_MODELS.keys())
+
+
+def _selected_model_needs_download(model_name: str) -> bool:
+    return model_name in DOWNLOADABLE_QWEN35_MODELS
+
+
+def _download_qwen35_model(model_name: str) -> Path:
+    if snapshot_download is None:
+        raise RuntimeError("Install `huggingface_hub` to download Qwen3.5 models from Hugging Face.")
+
+    repo_id, folder_name = DOWNLOADABLE_QWEN35_MODELS[model_name]
+    model_dir = Path(folder_paths.models_dir) / "llm" / folder_name
+    if any(model_dir.rglob("*.safetensors")):
+        return model_dir
+
+    model_dir.mkdir(parents=True, exist_ok=True)
+    logging.info("Downloading %s to %s", repo_id, model_dir)
+    snapshot_download(
+        repo_id=repo_id,
+        local_dir=str(model_dir),
+        local_dir_use_symlinks=False,
+        resume_download=True,
+    )
+    return model_dir
+
+
+def _resolve_selected_model_path(model_name: str) -> Path:
+    if _selected_model_needs_download(model_name):
+        return _download_qwen35_model(model_name)
+    return (BASE_PATH / model_name).resolve()
 
 
 def _resolve_model_directory(model_path: Path) -> Path:
@@ -320,12 +358,8 @@ class CaptionatorQwen35:
     CATEGORY = "Captionator"
 
     def run(self, image, model, prompt, resize_to, max_new_tokens, seed, think):
-        if model == _NO_MODEL_SENTINEL:
-            message = "Install a Qwen3.5 `.safetensors` with tokenizer + config in models/llm or models/text_encoders."
-            return (message, message)
-
-        model_path = (BASE_PATH / model).resolve()
         try:
+            model_path = _resolve_selected_model_path(model)
             processor, tokenizer, llm = _ensure_model(model_path)
         except Exception as exc:
             logging.exception("Failed to load qwen model", exc_info=exc)
@@ -367,10 +401,6 @@ class CaptionImproverQwen35:
     CATEGORY = "Captionator"
 
     def run(self, model, prompt, style_source_mode, resize_to, max_new_tokens, seed, think, image=None):
-        if model == _NO_MODEL_SENTINEL:
-            message = "Install a Qwen3.5 `.safetensors` with tokenizer + config in models/llm or models/text_encoders."
-            return (message, message, message)
-
         original_prompt = prompt.strip()
         has_image = image is not None
         if not original_prompt and not has_image:
@@ -378,8 +408,8 @@ class CaptionImproverQwen35:
             return (message, message, message)
 
         instruction = _build_improver_prompt(original_prompt, has_image, max_new_tokens, style_source_mode)
-        model_path = (BASE_PATH / model).resolve()
         try:
+            model_path = _resolve_selected_model_path(model)
             processor, tokenizer, llm = _ensure_model(model_path)
         except Exception as exc:
             logging.exception("Failed to load qwen model", exc_info=exc)

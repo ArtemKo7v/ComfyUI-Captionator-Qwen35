@@ -15,6 +15,7 @@ Simple ComfyUI custom node for running multimodal Qwen3.5 image captioning.
 
 - Scans `models/text_encoders`, `models/llm`, and `models/LLM` using `folder_paths`
 - Loads local Qwen3.5 checkpoints
+- Offers one-click download options for Qwen3.5 2B, 4B, and 9B when no local models are found
 - Sends both image and prompt to the model
 - Supports `seed`
 - Supports `think` mode
@@ -49,6 +50,7 @@ The model directory should include the checkpoint and the usual Hugging Face fil
 
 - `image`: input image
 - `model`: model selected from discovered `.safetensors` files
+- If no matching local model is found, the dropdown shows download actions for Qwen3.5 2B, 4B, and 9B into `models/llm`
 - `prompt`: multiline instruction for the model
 - `resize_to`: longest image side before inference; `0` disables resizing
 - `max_new_tokens`: maximum number of generated output tokens
