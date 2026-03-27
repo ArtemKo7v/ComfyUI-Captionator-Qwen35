@@ -263,28 +263,39 @@ def _build_improver_prompt(
 
     parts = [""]
     if original_prompt:
-        parts.append(f"Original prompt: {original_prompt}\n\n")
-    parts.append(f"TASK: Make a brief detailed prompt{based_on_suffix}.\n\nINSTRUCTIONS:\n")
+        parts.append(f"ORIGINAL PROMPT:\n{original_prompt}\n\n")
+    parts.append(f"TASK: Write one improved image-generation prompt{based_on_suffix}.\n\n")
+    parts.append("GOAL:\n")
+    parts.append("Rewrite the input into a clear, vivid, compact prompt while preserving the intended meaning and important details.\n\n")
+    parts.append("INSTRUCTIONS:\n")
     if original_prompt and has_image:
         if style_source_mode == IMPROVER_STYLE_SOURCE_MODES[0]:
-            parts.append("Use the original prompt as the main source of subjects and content details.\n")
-            parts.append("Use the attached image as the main source of visual style and stylistic details.\n")
-            parts.append("If the original prompt and image conflict, keep the subjects and core details from the original prompt.\n")
+            parts.append("Primary source for subjects, actions, composition, objects, attributes, and scene details: original prompt.\n")
+            parts.append("Secondary source for style, color palette, lighting, texture, mood, and rendering look: attached image.\n")
+            parts.append("Do not remove, replace, or reinterpret important content details from the original prompt because of the image.\n")
+            parts.append("If the original prompt and image conflict, keep the subjects and semantic content from the original prompt.\n")
         elif style_source_mode == IMPROVER_STYLE_SOURCE_MODES[1]:
-            parts.append("Use the attached image as the main source of subjects and content details.\n")
-            parts.append("Use the original prompt as the main source of style and stylistic cues.\n")
-            parts.append("If the original prompt and image conflict, keep the subjects and core details from the attached image.\n")
+            parts.append("Primary source for subjects, actions, composition, objects, attributes, and scene details: attached image.\n")
+            parts.append("Secondary source for style wording, mood, artistic direction, and stylistic cues: original prompt.\n")
+            parts.append("Do not overwrite the main visual content from the image with conflicting content from the original prompt.\n")
+            parts.append("If the original prompt and image conflict, keep the subjects and semantic content from the image.\n")
         else:
-            parts.append("Merge the subjects, details, and style cues from both the original prompt and the attached image.\n")
-            parts.append("Combine them into one coherent prompt without repeating the same idea twice.\n")
+            parts.append("Merge the subjects, scene details, and style cues from both the original prompt and the attached image.\n")
+            parts.append("Keep all important non-conflicting details from both sources.\n")
+            parts.append("If details overlap, consolidate them into one stronger phrasing instead of repeating them.\n")
+            parts.append("If there is a direct conflict, prefer the version that creates the most coherent final prompt.\n")
     else:
         if original_prompt:
-            parts.append("Use the specified original prompt as the source of subjects, details, and style cues.\n")
+            parts.append("Use the original prompt as the only source of subjects, details, and style cues.\n")
+            parts.append("Preserve all important concrete details from the original prompt.\n")
         if has_image:
-            parts.append("Use the attached image as the source of subjects, details, and style cues.\n")
-    parts.append(
-        f"The result prompt should be in English language, be a single paragraph, and not exceed {max_new_tokens} tokens."
-    )
+            parts.append("Use the attached image as the only source of subjects, details, style, lighting, and mood.\n")
+            parts.append("Describe visible content precisely without inventing unsupported details.\n")
+    parts.append("Keep the final result concise but information-dense.\n")
+    parts.append("Write in English.\n")
+    parts.append("Return a single paragraph only.\n")
+    parts.append("Return only the final prompt text with no explanation, no labels, and no bullet points.\n")
+    parts.append("Keep the final prompt under 250 words.\n")
     return "".join(parts)
 
 
