@@ -35,6 +35,7 @@ pip install -r requirements.txt
 ```
 
 You also need a `transformers` build with Qwen3.5 support, plus the model files themselves.
+If you run on CUDA with automatic device mapping, install `accelerate` in the same environment as ComfyUI.
 
 ## Model placement
 
