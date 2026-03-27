@@ -2,7 +2,7 @@
 [project]
 name = "comfyui-captionator-qwen35"
 description = "ComfyUI Qwen 3.5 Prompting nodes (captionate image, improve prompt, etc)"
-version = "0.1.4"
+version = "0.1.5"
 license = { text = "MIT" }
 dependencies  = ["sentencepiece>=0.1.99", "tiktoken>=0.4.0"]
 
