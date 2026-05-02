@@ -95,4 +95,4 @@ Prompt Improver workflow example:
 - Restart ComfyUI after changing code or installing dependencies.
 - If `think` is not supported by your installed processor version, the node falls back automatically.
 - Large images and large token counts can increase VRAM use.
-- Model discovery only shows `.safetensors` paths containing `qwen`, `3`, and `5` (case-insensitive).
+- Model discovery only shows `.safetensors` paths containing `qwen` and `3` (case-insensitive).

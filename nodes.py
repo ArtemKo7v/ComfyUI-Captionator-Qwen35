@@ -15,25 +15,25 @@ except ImportError:  # pragma: no cover
     snapshot_download = None  # type: ignore[assignment]
 
 try:
+    import transformers
     import torch
     from transformers import (
         AutoProcessor,
         AutoTokenizer,
         BitsAndBytesConfig,
         GenerationConfig,
-        Qwen3_5ForConditionalGeneration,
     )
 except ImportError:  # pragma: no cover
+    transformers = None  # type: ignore[assignment]
     torch = None  # type: ignore[assignment]
     AutoProcessor = None  # type: ignore[assignment]
     AutoTokenizer = None  # type: ignore[assignment]
     BitsAndBytesConfig = None  # type: ignore[assignment]
     GenerationConfig = None  # type: ignore[assignment]
-    Qwen3_5ForConditionalGeneration = None  # type: ignore[assignment]
 
 BASE_PATH = Path(folder_paths.base_path)
 _DEVICE = torch.device("cuda" if torch and torch.cuda.is_available() else "cpu") if torch else None
-_MODEL_CACHE: Dict[str, Tuple[Any, Any]] = {}
+_MODEL_CACHE: Dict[str, Tuple[Any, Any, Any]] = {}
 IMAGE_FACTOR = 32
 IMPROVER_STYLE_SOURCE_MODES = (
     "Details from prompt, style from image",
@@ -66,7 +66,7 @@ def _list_qwen35_models() -> Iterable[str]:
 
         for path in sorted(model_dir.rglob("*.safetensors")):
             path_text = path.as_posix().lower()
-            if "qwen" not in path_text or "3" not in path_text or "5" not in path_text:
+            if "qwen" not in path_text or "3" not in path_text:
                 continue
             try:
                 models.append(path.relative_to(BASE_PATH).as_posix())
@@ -146,14 +146,48 @@ def _build_model_kwargs() -> Dict[str, Any]:
     return kwargs
 
 
+def _model_loader_candidates() -> Iterable[Tuple[str, Any]]:
+    if transformers is None:
+        return []
+
+    names = (
+        "AutoModelForImageTextToText",
+        "AutoModelForVision2Seq",
+        "AutoModelForCausalLM",
+        "Qwen3_5ForConditionalGeneration",
+    )
+    candidates = []
+    for name in names:
+        loader = getattr(transformers, name, None)
+        if loader is not None:
+            candidates.append((name, loader))
+    return candidates
+
+
+def _load_model_from_pretrained(model_dir: Path, model_kwargs: Dict[str, Any]) -> Any:
+    errors = []
+    for loader_name, loader in _model_loader_candidates():
+        try:
+            logging.info("Loading model with %s from %s", loader_name, model_dir)
+            return loader.from_pretrained(str(model_dir), **model_kwargs)
+        except Exception as exc:
+            errors.append(f"{loader_name}: {exc}")
+
+    if not errors:
+        raise RuntimeError("Installed transformers version does not provide a supported Qwen/VL model loader.")
+
+    details = "\n".join(errors)
+    raise RuntimeError(f"Failed to load model with available Transformers loaders:\n{details}")
+
+
 def _ensure_model(model_path: Path) -> Tuple[Any, Any, Any]:
     if (
         AutoProcessor is None
         or AutoTokenizer is None
-        or Qwen3_5ForConditionalGeneration is None
+        or transformers is None
         or torch is None
     ):
-        raise RuntimeError("Install torch + transformers with Qwen3.5 support to use this node.")
+        raise RuntimeError("Install torch + transformers with Qwen/VL support to use this node.")
 
     model_dir = _resolve_model_directory(model_path)
     key = model_dir.as_posix()
@@ -170,7 +204,7 @@ def _ensure_model(model_path: Path) -> Tuple[Any, Any, Any]:
         add_eos_token=False,
     )
     model_kwargs = _build_model_kwargs()
-    model = Qwen3_5ForConditionalGeneration.from_pretrained(str(model_dir), **model_kwargs)
+    model = _load_model_from_pretrained(model_dir, model_kwargs)
     model.eval()
 
     _MODEL_CACHE[key] = (processor, tokenizer, model)
