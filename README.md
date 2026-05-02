@@ -47,11 +47,13 @@ Put your Qwen3.5 model in one of these folders:
 - `ComfyUI/models/LLM`
 
 The model directory should include the checkpoint and the usual Hugging Face files such as config, tokenizer, and processor files.
+Text-only generation can work without processor files if the selected model directory includes `config.json` and tokenizer files.
+Standalone `.safetensors` files without the surrounding Hugging Face model files are not enough for Transformers loading.
 
 ## Inputs
 
 - `image`: optional input image; leave disconnected for text-only generation from `prompt`
-- `model`: model selected from discovered `.safetensors` files
+- `model`: model selected from discovered Qwen 3 `.safetensors` files or their Hugging Face model directories
 - If no matching local model is found, the dropdown shows download actions for Qwen3.5 2B, 4B, and 9B into `models/llm`
 - `prompt`: multiline instruction for the model
 - `resize_to`: longest image side before inference; `0` disables resizing

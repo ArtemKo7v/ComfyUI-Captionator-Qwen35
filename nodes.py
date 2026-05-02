@@ -58,8 +58,26 @@ def _model_dirs() -> Iterable[Path]:
     return sorted(dirs)
 
 
+def _find_hf_model_dir_for_path(path: Path) -> Path | None:
+    start = path if path.is_dir() else path.parent
+    for candidate in (start, *start.parents):
+        if _has_hf_config(candidate):
+            return candidate
+        if candidate in _model_dirs():
+            break
+    return None
+
+
+def _display_model_path(path: Path) -> str:
+    try:
+        return path.relative_to(BASE_PATH).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
 def _list_qwen35_models() -> Iterable[str]:
-    models = []
+    models: list[str] = []
+    seen: set[str] = set()
     for model_dir in _model_dirs():
         if not model_dir.is_dir():
             continue
@@ -68,10 +86,11 @@ def _list_qwen35_models() -> Iterable[str]:
             path_text = path.as_posix().lower()
             if "qwen" not in path_text or "3" not in path_text:
                 continue
-            try:
-                models.append(path.relative_to(BASE_PATH).as_posix())
-            except ValueError:
-                models.append(path.as_posix())
+            display_path = _display_model_path(_find_hf_model_dir_for_path(path) or path)
+            if display_path in seen:
+                continue
+            seen.add(display_path)
+            models.append(display_path)
 
     return models or list(DOWNLOADABLE_QWEN35_MODELS.keys())
 
@@ -106,12 +125,23 @@ def _resolve_selected_model_path(model_name: str) -> Path:
     return (BASE_PATH / model_name).resolve()
 
 
+def _has_hf_config(path: Path) -> bool:
+    return path.is_dir() and (path / "config.json").is_file()
+
+
 def _resolve_model_directory(model_path: Path) -> Path:
-    if model_path.is_dir():
-        return model_path
-    if model_path.exists():
-        return model_path.parent
-    return model_path.parent if model_path.parent.exists() else model_path
+    model_dir = _find_hf_model_dir_for_path(model_path)
+    if model_dir is not None:
+        return model_dir
+
+    if model_path.suffix == ".safetensors":
+        raise RuntimeError(
+            f"Selected file `{model_path.name}` is a standalone weights file. "
+            "Transformers needs the full Hugging Face model directory with config.json, tokenizer files, "
+            "and processor files for image input."
+        )
+
+    raise RuntimeError(f"Could not find a Hugging Face model directory with config.json for `{model_path}`.")
 
 
 def _safe_bitsandbytes_config():
@@ -180,7 +210,7 @@ def _load_model_from_pretrained(model_dir: Path, model_kwargs: Dict[str, Any]) -
     raise RuntimeError(f"Failed to load model with available Transformers loaders:\n{details}")
 
 
-def _ensure_model(model_path: Path) -> Tuple[Any, Any, Any]:
+def _ensure_model(model_path: Path) -> Tuple[Any | None, Any, Any]:
     if (
         AutoProcessor is None
         or AutoTokenizer is None
@@ -195,7 +225,6 @@ def _ensure_model(model_path: Path) -> Tuple[Any, Any, Any]:
     if cached:
         return cached
 
-    processor = AutoProcessor.from_pretrained(str(model_dir), trust_remote_code=True, local_files_only=True)
     tokenizer = AutoTokenizer.from_pretrained(
         str(model_dir),
         trust_remote_code=True,
@@ -203,6 +232,12 @@ def _ensure_model(model_path: Path) -> Tuple[Any, Any, Any]:
         add_bos_token=False,
         add_eos_token=False,
     )
+    try:
+        processor = AutoProcessor.from_pretrained(str(model_dir), trust_remote_code=True, local_files_only=True)
+    except ValueError as exc:
+        logging.warning("Processor is not available for %s; text-only generation can still work: %s", model_dir, exc)
+        processor = None
+
     model_kwargs = _build_model_kwargs()
     model = _load_model_from_pretrained(model_dir, model_kwargs)
     model.eval()
@@ -266,12 +301,11 @@ def _build_messages(image: Image.Image | None, prompt: str) -> list[Dict[str, An
     return [{"role": "user", "content": content}]
 
 
-def _prepare_inputs(processor: Any, image: Any | None, prompt: str, resize_to: int, think: bool) -> Dict[str, Any]:
-    pil_image = None
-    if image is not None:
-        pil_image = _ensure_pil_image(image)
-        pil_image = _resize_to_limit(pil_image, resize_to)
-    messages = _build_messages(pil_image, prompt)
+def _build_text_messages(prompt: str) -> list[Dict[str, str]]:
+    return [{"role": "user", "content": prompt.strip()}]
+
+
+def _apply_chat_template(chat_handler: Any, messages: list[Dict[str, Any]], think: bool) -> Dict[str, Any]:
     template_kwargs = dict(
         tokenize=True,
         add_generation_prompt=True,
@@ -280,10 +314,32 @@ def _prepare_inputs(processor: Any, image: Any | None, prompt: str, resize_to: i
         enable_thinking=think,
     )
     try:
-        inputs = processor.apply_chat_template(messages, **template_kwargs)
+        return chat_handler.apply_chat_template(messages, **template_kwargs)
     except TypeError:
         template_kwargs.pop("enable_thinking", None)
-        inputs = processor.apply_chat_template(messages, **template_kwargs)
+        return chat_handler.apply_chat_template(messages, **template_kwargs)
+
+
+def _prepare_inputs(
+    processor: Any | None,
+    tokenizer: Any,
+    image: Any | None,
+    prompt: str,
+    resize_to: int,
+    think: bool,
+) -> Dict[str, Any]:
+    pil_image = None
+    if image is not None:
+        if processor is None:
+            raise RuntimeError("This model does not provide a processor, so image input is not supported.")
+        pil_image = _ensure_pil_image(image)
+        pil_image = _resize_to_limit(pil_image, resize_to)
+
+    if pil_image is not None:
+        inputs = _apply_chat_template(processor, _build_messages(pil_image, prompt), think)
+    else:
+        chat_handler = processor or tokenizer
+        inputs = _apply_chat_template(chat_handler, _build_text_messages(prompt), think)
     inputs.pop("token_type_ids", None)
 
     if _DEVICE:
@@ -403,7 +459,7 @@ class CaptionatorQwen35:
             return (message, message)
 
         try:
-            inputs = _prepare_inputs(processor, image, prompt, resize_to, think)
+            inputs = _prepare_inputs(processor, tokenizer, image, prompt, resize_to, think)
             full_output = _generate_text(tokenizer, llm, inputs, seed, max_new_tokens)
         except Exception as exc:
             logging.exception("Inference failure", exc_info=exc)
@@ -453,7 +509,7 @@ class CaptionImproverQwen35:
             return (message, message, instruction)
 
         try:
-            inputs = _prepare_inputs(processor, image, instruction, resize_to, think)
+            inputs = _prepare_inputs(processor, tokenizer, image, instruction, resize_to, think)
             full_output = _generate_text(tokenizer, llm, inputs, seed, max_new_tokens)
         except Exception as exc:
             logging.exception("Inference failure", exc_info=exc)
