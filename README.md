@@ -7,7 +7,7 @@ Simple ComfyUI custom node for running multimodal Qwen3.5 image captioning.
 - Name: `CaptionatorQwen35`
 - Description: `ComfyUI Qwen 3.5 Prompting nodes`
 - Category: `Captionator`
-- Input image: `IMAGE`
+- Optional input image: `IMAGE`
 - Output caption: `STRING`
 - Output full_output: `STRING`
 
@@ -16,7 +16,8 @@ Simple ComfyUI custom node for running multimodal Qwen3.5 image captioning.
 - Scans `models/text_encoders`, `models/llm`, and `models/LLM` using `folder_paths`
 - Loads local Qwen3.5 checkpoints
 - Offers one-click download options for Qwen3.5 2B, 4B, and 9B when no local models are found
-- Sends both image and prompt to the model
+- Sends prompt plus optional image to the model
+- Supports text-only generation when no image is connected
 - Supports `seed`
 - Supports `think` mode
 - Supports optional resize via `resize_to`
@@ -49,7 +50,7 @@ The model directory should include the checkpoint and the usual Hugging Face fil
 
 ## Inputs
 
-- `image`: input image
+- `image`: optional input image; leave disconnected for text-only generation from `prompt`
 - `model`: model selected from discovered `.safetensors` files
 - If no matching local model is found, the dropdown shows download actions for Qwen3.5 2B, 4B, and 9B into `models/llm`
 - `prompt`: multiline instruction for the model

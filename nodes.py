@@ -376,14 +376,16 @@ class CaptionatorQwen35:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "image": ("IMAGE",),
                 "model": (_list_qwen35_models(),),
                 "prompt": ("STRING", {"default": "Write a clear and detailed description of the given image in one concise paragraph (maximum 200 words). Focus on key visual elements such as main subjects, their appearance, positions, actions, environment, lighting, colors, mood, and any notable details. Avoid speculation or assumptions beyond what is visible. Use precise, descriptive language while keeping the text compact and well-structured.", "multiline": True}),
                 "resize_to": ("INT", {"default": 0, "min": 0, "max": 4096, "step": IMAGE_FACTOR}),
                 "max_new_tokens": ("INT", {"default": 256, "min": 1, "max": 8192, "step": 1}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0x7FFFFFFFFFFFFFFF}),
                 "think": ("BOOLEAN", {"default": False}),
-            }
+            },
+            "optional": {
+                "image": ("IMAGE",),
+            },
         }
 
     RETURN_TYPES = ("STRING", "STRING")
@@ -391,7 +393,7 @@ class CaptionatorQwen35:
     FUNCTION = "run"
     CATEGORY = "Captionator"
 
-    def run(self, image, model, prompt, resize_to, max_new_tokens, seed, think):
+    def run(self, model, prompt, resize_to, max_new_tokens, seed, think, image=None):
         try:
             model_path = _resolve_selected_model_path(model)
             processor, tokenizer, llm = _ensure_model(model_path)
