@@ -320,6 +320,12 @@ def _apply_chat_template(chat_handler: Any, messages: list[Dict[str, Any]], thin
         return chat_handler.apply_chat_template(messages, **template_kwargs)
 
 
+def _prepare_text_inputs(tokenizer: Any, prompt: str, think: bool) -> Dict[str, Any]:
+    if hasattr(tokenizer, "apply_chat_template"):
+        return _apply_chat_template(tokenizer, _build_text_messages(prompt), think)
+    return tokenizer(prompt.strip(), return_tensors="pt")
+
+
 def _prepare_inputs(
     processor: Any | None,
     tokenizer: Any,
@@ -338,8 +344,7 @@ def _prepare_inputs(
     if pil_image is not None:
         inputs = _apply_chat_template(processor, _build_messages(pil_image, prompt), think)
     else:
-        chat_handler = processor or tokenizer
-        inputs = _apply_chat_template(chat_handler, _build_text_messages(prompt), think)
+        inputs = _prepare_text_inputs(tokenizer, prompt, think)
     inputs.pop("token_type_ids", None)
 
     if _DEVICE:
