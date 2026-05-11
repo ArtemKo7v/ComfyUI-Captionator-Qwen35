@@ -152,8 +152,19 @@ def _safe_bitsandbytes_config():
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=torch.float16,
+            llm_int8_enable_fp32_cpu_offload=True,
         )
     )
+
+
+def _offload_folder() -> str:
+    temp_dir_getter = getattr(folder_paths, "get_temp_directory", None)
+    if callable(temp_dir_getter):
+        offload_dir = Path(temp_dir_getter()) / "qwen35_transformers_offload"
+    else:
+        offload_dir = BASE_PATH / "temp" / "qwen35_transformers_offload"
+    offload_dir.mkdir(parents=True, exist_ok=True)
+    return str(offload_dir)
 
 
 def _build_model_kwargs() -> Dict[str, Any]:
@@ -167,6 +178,7 @@ def _build_model_kwargs() -> Dict[str, Any]:
         kwargs.update(
             dict(
                 device_map="auto",
+                offload_folder=_offload_folder(),
                 torch_dtype=torch.float16,
                 **_safe_bitsandbytes_config(),
             )
