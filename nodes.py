@@ -188,16 +188,18 @@ def _build_model_kwargs() -> Dict[str, Any]:
     return kwargs
 
 
-def _model_loader_candidates() -> Iterable[Tuple[str, Any]]:
+def _model_loader_candidates(allow_text_fallback: bool) -> Iterable[Tuple[str, Any]]:
     if transformers is None:
         return []
 
     names = (
         "AutoModelForImageTextToText",
         "AutoModelForVision2Seq",
-        "AutoModelForCausalLM",
         "Qwen3_5ForConditionalGeneration",
     )
+    if allow_text_fallback:
+        names = (*names, "AutoModelForCausalLM")
+
     candidates = []
     for name in names:
         loader = getattr(transformers, name, None)
@@ -206,9 +208,9 @@ def _model_loader_candidates() -> Iterable[Tuple[str, Any]]:
     return candidates
 
 
-def _load_model_from_pretrained(model_dir: Path, model_kwargs: Dict[str, Any]) -> Any:
+def _load_model_from_pretrained(model_dir: Path, model_kwargs: Dict[str, Any], allow_text_fallback: bool) -> Any:
     errors = []
-    for loader_name, loader in _model_loader_candidates():
+    for loader_name, loader in _model_loader_candidates(allow_text_fallback):
         try:
             logging.info("Loading model with %s from %s", loader_name, model_dir)
             return loader.from_pretrained(str(model_dir), **model_kwargs)
@@ -219,7 +221,15 @@ def _load_model_from_pretrained(model_dir: Path, model_kwargs: Dict[str, Any]) -
         raise RuntimeError("Installed transformers version does not provide a supported Qwen/VL model loader.")
 
     details = "\n".join(errors)
-    raise RuntimeError(f"Failed to load model with available Transformers loaders:\n{details}")
+    if allow_text_fallback:
+        raise RuntimeError(f"Failed to load model with available Transformers loaders:\n{details}")
+
+    raise RuntimeError(
+        "Failed to load a multimodal Qwen3.5 model with available Transformers loaders. "
+        "A processor was found, so the node did not fall back to AutoModelForCausalLM because that loader "
+        "cannot consume image tensors such as pixel_values and image_grid_thw.\n"
+        f"{details}"
+    )
 
 
 def _ensure_model(model_path: Path) -> Tuple[Any | None, Any, Any]:
@@ -251,7 +261,7 @@ def _ensure_model(model_path: Path) -> Tuple[Any | None, Any, Any]:
         processor = None
 
     model_kwargs = _build_model_kwargs()
-    model = _load_model_from_pretrained(model_dir, model_kwargs)
+    model = _load_model_from_pretrained(model_dir, model_kwargs, allow_text_fallback=processor is None)
     model.eval()
 
     _MODEL_CACHE[key] = (processor, tokenizer, model)
@@ -323,13 +333,23 @@ def _apply_chat_template(chat_handler: Any, messages: list[Dict[str, Any]], thin
         add_generation_prompt=True,
         return_dict=True,
         return_tensors="pt",
-        enable_thinking=think,
     )
+    if _supports_enable_thinking(chat_handler):
+        template_kwargs["enable_thinking"] = think
+
     try:
         return chat_handler.apply_chat_template(messages, **template_kwargs)
     except TypeError:
         template_kwargs.pop("enable_thinking", None)
         return chat_handler.apply_chat_template(messages, **template_kwargs)
+
+
+def _supports_enable_thinking(chat_handler: Any) -> bool:
+    template = getattr(chat_handler, "chat_template", None)
+    if template is None:
+        tokenizer = getattr(chat_handler, "tokenizer", None)
+        template = getattr(tokenizer, "chat_template", None)
+    return isinstance(template, str) and "enable_thinking" in template
 
 
 def _prepare_text_inputs(tokenizer: Any, prompt: str, think: bool) -> Dict[str, Any]:
