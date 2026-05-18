@@ -188,6 +188,12 @@ def _build_model_kwargs() -> Dict[str, Any]:
     return kwargs
 
 
+def _without_quantization_config(model_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    kwargs = dict(model_kwargs)
+    kwargs.pop("quantization_config", None)
+    return kwargs
+
+
 def _model_loader_candidates(allow_text_fallback: bool) -> Iterable[Tuple[str, Any]]:
     if transformers is None:
         return []
@@ -208,14 +214,41 @@ def _model_loader_candidates(allow_text_fallback: bool) -> Iterable[Tuple[str, A
     return candidates
 
 
-def _load_model_from_pretrained(model_dir: Path, model_kwargs: Dict[str, Any], allow_text_fallback: bool) -> Any:
+def _is_bitsandbytes_params4bit_error(errors: Iterable[str]) -> bool:
+    return any("Params4bit.__new__()" in error and "_is_hf_initialized" in error for error in errors)
+
+
+def _try_load_with_candidates(
+    model_dir: Path,
+    model_kwargs: Dict[str, Any],
+    allow_text_fallback: bool,
+) -> Tuple[Any | None, list[str]]:
     errors = []
     for loader_name, loader in _model_loader_candidates(allow_text_fallback):
         try:
             logging.info("Loading model with %s from %s", loader_name, model_dir)
-            return loader.from_pretrained(str(model_dir), **model_kwargs)
+            return loader.from_pretrained(str(model_dir), **model_kwargs), errors
         except Exception as exc:
             errors.append(f"{loader_name}: {exc}")
+    return None, errors
+
+
+def _load_model_from_pretrained(model_dir: Path, model_kwargs: Dict[str, Any], allow_text_fallback: bool) -> Any:
+    model, errors = _try_load_with_candidates(model_dir, model_kwargs, allow_text_fallback)
+    if model is not None:
+        return model
+
+    if "quantization_config" in model_kwargs and _is_bitsandbytes_params4bit_error(errors):
+        logging.warning(
+            "4-bit bitsandbytes loading failed for %s; retrying without quantization_config. "
+            "Update bitsandbytes in the ComfyUI environment if this fallback uses too much VRAM.",
+            model_dir,
+        )
+        fallback_kwargs = _without_quantization_config(model_kwargs)
+        fallback_model, fallback_errors = _try_load_with_candidates(model_dir, fallback_kwargs, allow_text_fallback)
+        if fallback_model is not None:
+            return fallback_model
+        errors.extend(f"without quantization_config - {error}" for error in fallback_errors)
 
     if not errors:
         raise RuntimeError("Installed transformers version does not provide a supported Qwen/VL model loader.")
