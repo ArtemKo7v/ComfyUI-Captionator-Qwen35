@@ -99,3 +99,13 @@ Prompt Improver workflow example:
 - If `think` is not supported by your installed processor version, the node falls back automatically.
 - Large images and large token counts can increase VRAM use.
 - Model discovery only shows `.safetensors` paths containing `qwen` and `3` (case-insensitive).
+
+## Development
+
+Run the unit tests without a ComfyUI installation or model checkpoint:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The tests use a mocked `folder_paths` module and do not perform model inference or downloads.
