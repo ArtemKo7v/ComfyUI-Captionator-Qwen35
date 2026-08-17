@@ -109,3 +109,4 @@ python -m unittest discover -s tests -v
 ```
 
 The tests use a mocked `folder_paths` module and do not perform model inference or downloads.
+GitHub Actions runs the same suite for Python 3.10, 3.12, and 3.13 on every push and pull request.

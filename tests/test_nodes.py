@@ -130,12 +130,37 @@ class ImageConversionTests(unittest.TestCase):
         self.assertEqual(image.size, (5, 2))
         self.assertEqual(image.getpixel((0, 0)), (0, 255, 0))
 
-    @unittest.skipIf(nodes.torch is None, "torch is not available")
     def test_converts_single_item_comfyui_tensor_batch(self):
-        tensor = nodes.torch.zeros((1, 2, 3, 3), dtype=nodes.torch.float32)
-        tensor[..., 2] = 1.0
+        array = np.zeros((1, 2, 3, 3), dtype=np.float32)
+        array[..., 2] = 1.0
 
-        image = nodes._ensure_pil_image(tensor)
+        class FakeTensor:
+            def __init__(self, value):
+                self.value = value
+
+            @property
+            def ndim(self):
+                return self.value.ndim
+
+            @property
+            def shape(self):
+                return self.value.shape
+
+            def __getitem__(self, item):
+                return FakeTensor(self.value[item])
+
+            def detach(self):
+                return self
+
+            def cpu(self):
+                return self
+
+            def numpy(self):
+                return self.value
+
+        fake_torch = types.SimpleNamespace(Tensor=FakeTensor)
+        with mock.patch.object(nodes, "torch", fake_torch):
+            image = nodes._ensure_pil_image(FakeTensor(array))
 
         self.assertEqual(image.size, (3, 2))
         self.assertEqual(image.getpixel((0, 0)), (0, 0, 255))
