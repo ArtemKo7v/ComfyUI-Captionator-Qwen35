@@ -1,40 +1,33 @@
 from __future__ import annotations
 
 import logging
-from math import ceil
 from pathlib import Path
-from typing import Any, Dict, Iterable, Tuple
-
-import numpy as np
-from PIL import Image
+from typing import Iterable
 
 import folder_paths
+
 try:
     from huggingface_hub import snapshot_download
 except ImportError:  # pragma: no cover
     snapshot_download = None  # type: ignore[assignment]
 
-try:
-    import transformers
-    import torch
-    from transformers import (
-        AutoProcessor,
-        AutoTokenizer,
-        BitsAndBytesConfig,
-        GenerationConfig,
+if __package__:
+    from .captionator.backends import (
+        CaptionBackend,
+        GenerationRequest,
+        IMAGE_FACTOR,
+        TransformersBackend,
     )
-except ImportError:  # pragma: no cover
-    transformers = None  # type: ignore[assignment]
-    torch = None  # type: ignore[assignment]
-    AutoProcessor = None  # type: ignore[assignment]
-    AutoTokenizer = None  # type: ignore[assignment]
-    BitsAndBytesConfig = None  # type: ignore[assignment]
-    GenerationConfig = None  # type: ignore[assignment]
+else:  # Allows direct loading of nodes.py in the isolated unit tests.
+    from captionator.backends import (
+        CaptionBackend,
+        GenerationRequest,
+        IMAGE_FACTOR,
+        TransformersBackend,
+    )
+
 
 BASE_PATH = Path(folder_paths.base_path)
-_DEVICE = torch.device("cuda" if torch and torch.cuda.is_available() else "cpu") if torch else None
-_MODEL_CACHE: Dict[str, Tuple[Any, Any, Any]] = {}
-IMAGE_FACTOR = 32
 IMPROVER_STYLE_SOURCE_MODES = (
     "Details from prompt, style from image",
     "Details from image, style from prompt",
@@ -46,6 +39,8 @@ DOWNLOADABLE_QWEN35_MODELS = {
     "[Download] Qwen 3.5 9B": ("Qwen/Qwen3.5-9B", "Qwen3.5-9B"),
 }
 
+_TRANSFORMERS_BACKEND = TransformersBackend()
+
 
 def _model_dirs() -> Iterable[Path]:
     dirs: set[Path] = set()
@@ -56,6 +51,10 @@ def _model_dirs() -> Iterable[Path]:
     dirs.add(Path(folder_paths.models_dir) / "llm")
     dirs.add(Path(folder_paths.models_dir) / "LLM")
     return sorted(dirs)
+
+
+def _has_hf_config(path: Path) -> bool:
+    return path.is_dir() and (path / "config.json").is_file()
 
 
 def _find_hf_model_dir_for_path(path: Path) -> Path | None:
@@ -125,320 +124,14 @@ def _resolve_selected_model_path(model_name: str) -> Path:
     return (BASE_PATH / model_name).resolve()
 
 
-def _has_hf_config(path: Path) -> bool:
-    return path.is_dir() and (path / "config.json").is_file()
+def _select_backend(model_path: Path) -> CaptionBackend:
+    return _TRANSFORMERS_BACKEND
 
 
-def _resolve_model_directory(model_path: Path) -> Path:
-    model_dir = _find_hf_model_dir_for_path(model_path)
-    if model_dir is not None:
-        return model_dir
-
-    if model_path.suffix == ".safetensors":
-        raise RuntimeError(
-            f"Selected file `{model_path.name}` is a standalone weights file. "
-            "Transformers needs the full Hugging Face model directory with config.json, tokenizer files, "
-            "and processor files for image input."
-        )
-
-    raise RuntimeError(f"Could not find a Hugging Face model directory with config.json for `{model_path}`.")
-
-
-def _safe_bitsandbytes_config():
-    if not BitsAndBytesConfig or torch is None:
-        return {}
-    return dict(
-        quantization_config=BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.float16,
-            llm_int8_enable_fp32_cpu_offload=True,
-        )
-    )
-
-
-def _offload_folder() -> str:
-    temp_dir_getter = getattr(folder_paths, "get_temp_directory", None)
-    if callable(temp_dir_getter):
-        offload_dir = Path(temp_dir_getter()) / "qwen35_transformers_offload"
-    else:
-        offload_dir = BASE_PATH / "temp" / "qwen35_transformers_offload"
-    offload_dir.mkdir(parents=True, exist_ok=True)
-    return str(offload_dir)
-
-
-def _build_model_kwargs() -> Dict[str, Any]:
-    kwargs = dict(
-        trust_remote_code=True,
-        local_files_only=True,
-        low_cpu_mem_usage=True,
-        ignore_mismatched_sizes=True,
-    )
-    if _DEVICE and _DEVICE.type == "cuda":
-        kwargs.update(
-            dict(
-                device_map="auto",
-                offload_folder=_offload_folder(),
-                torch_dtype=torch.float16,
-                **_safe_bitsandbytes_config(),
-            )
-        )
-    else:
-        kwargs.update(device_map="cpu", torch_dtype=torch.float32)
-    return kwargs
-
-
-def _without_quantization_config(model_kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    kwargs = dict(model_kwargs)
-    kwargs.pop("quantization_config", None)
-    return kwargs
-
-
-def _model_loader_candidates(allow_text_fallback: bool) -> Iterable[Tuple[str, Any]]:
-    if transformers is None:
-        return []
-
-    names = (
-        "AutoModelForImageTextToText",
-        "AutoModelForVision2Seq",
-        "Qwen3_5ForConditionalGeneration",
-    )
-    if allow_text_fallback:
-        names = (*names, "AutoModelForCausalLM")
-
-    candidates = []
-    for name in names:
-        loader = getattr(transformers, name, None)
-        if loader is not None:
-            candidates.append((name, loader))
-    return candidates
-
-
-def _is_bitsandbytes_params4bit_error(errors: Iterable[str]) -> bool:
-    return any("Params4bit.__new__()" in error and "_is_hf_initialized" in error for error in errors)
-
-
-def _try_load_with_candidates(
-    model_dir: Path,
-    model_kwargs: Dict[str, Any],
-    allow_text_fallback: bool,
-) -> Tuple[Any | None, list[str]]:
-    errors = []
-    for loader_name, loader in _model_loader_candidates(allow_text_fallback):
-        try:
-            logging.info("Loading model with %s from %s", loader_name, model_dir)
-            return loader.from_pretrained(str(model_dir), **model_kwargs), errors
-        except Exception as exc:
-            errors.append(f"{loader_name}: {exc}")
-    return None, errors
-
-
-def _load_model_from_pretrained(model_dir: Path, model_kwargs: Dict[str, Any], allow_text_fallback: bool) -> Any:
-    model, errors = _try_load_with_candidates(model_dir, model_kwargs, allow_text_fallback)
-    if model is not None:
-        return model
-
-    if "quantization_config" in model_kwargs and _is_bitsandbytes_params4bit_error(errors):
-        logging.warning(
-            "4-bit bitsandbytes loading failed for %s; retrying without quantization_config. "
-            "Update bitsandbytes in the ComfyUI environment if this fallback uses too much VRAM.",
-            model_dir,
-        )
-        fallback_kwargs = _without_quantization_config(model_kwargs)
-        fallback_model, fallback_errors = _try_load_with_candidates(model_dir, fallback_kwargs, allow_text_fallback)
-        if fallback_model is not None:
-            return fallback_model
-        errors.extend(f"without quantization_config - {error}" for error in fallback_errors)
-
-    if not errors:
-        raise RuntimeError("Installed transformers version does not provide a supported Qwen/VL model loader.")
-
-    details = "\n".join(errors)
-    if allow_text_fallback:
-        raise RuntimeError(f"Failed to load model with available Transformers loaders:\n{details}")
-
-    raise RuntimeError(
-        "Failed to load a multimodal Qwen3.5 model with available Transformers loaders. "
-        "A processor was found, so the node did not fall back to AutoModelForCausalLM because that loader "
-        "cannot consume image tensors such as pixel_values and image_grid_thw.\n"
-        f"{details}"
-    )
-
-
-def _ensure_model(model_path: Path) -> Tuple[Any | None, Any, Any]:
-    if (
-        AutoProcessor is None
-        or AutoTokenizer is None
-        or transformers is None
-        or torch is None
-    ):
-        raise RuntimeError("Install torch + transformers with Qwen/VL support to use this node.")
-
-    model_dir = _resolve_model_directory(model_path)
-    key = model_dir.as_posix()
-    cached = _MODEL_CACHE.get(key)
-    if cached:
-        return cached
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        str(model_dir),
-        trust_remote_code=True,
-        local_files_only=True,
-        add_bos_token=False,
-        add_eos_token=False,
-    )
-    try:
-        processor = AutoProcessor.from_pretrained(str(model_dir), trust_remote_code=True, local_files_only=True)
-    except ValueError as exc:
-        logging.warning("Processor is not available for %s; text-only generation can still work: %s", model_dir, exc)
-        processor = None
-
-    model_kwargs = _build_model_kwargs()
-    model = _load_model_from_pretrained(model_dir, model_kwargs, allow_text_fallback=processor is None)
-    model.eval()
-
-    _MODEL_CACHE[key] = (processor, tokenizer, model)
-    return processor, tokenizer, model
-
-
-def _resize_to_limit(image: Image.Image, resize_to: int) -> Image.Image:
-    width, height = image.size
-    if resize_to <= 0 or max(width, height) <= resize_to:
-        return image
-
-    ratio = resize_to / max(width, height)
-    width = width * ratio
-    height = height * ratio
-    width = ceil(width / IMAGE_FACTOR) * IMAGE_FACTOR
-    height = ceil(height / IMAGE_FACTOR) * IMAGE_FACTOR
-    return image.resize((int(width), int(height)), resample=Image.BICUBIC)
-
-
-def _ensure_pil_image(image: Any) -> Image.Image:
-    if isinstance(image, Image.Image):
-        return image
-
-    if isinstance(image, dict) and "image" in image:
-        return _ensure_pil_image(image["image"])
-
-    if torch is not None and isinstance(image, torch.Tensor):
-        tensor = image.detach().cpu()
-        if tensor.ndim == 4 and tensor.shape[0] == 1:
-            tensor = tensor[0]
-        array = tensor.numpy()
-        if array.ndim == 3 and array.shape[0] in (1, 3, 4) and array.shape[-1] not in (1, 3, 4):
-            array = np.transpose(array, (1, 2, 0))
-        array = np.clip(array, 0.0, 1.0)
-        array = (array * 255.0).astype(np.uint8)
-        img = Image.fromarray(array)
-        return img.convert("RGB")
-
-    if isinstance(image, np.ndarray):
-        array = image
-        if array.ndim == 4 and array.shape[0] == 1:
-            array = array[0]
-        if array.ndim == 3 and array.shape[0] in (1, 3, 4) and array.shape[-1] not in (1, 3, 4):
-            array = np.transpose(array, (1, 2, 0))
-        if array.dtype != np.uint8:
-            array = np.clip(array, 0.0, 1.0)
-            array = (array * 255.0).astype(np.uint8)
-        return Image.fromarray(array).convert("RGB")
-
-    raise TypeError(f"Unsupported image type: {type(image)}")
-
-
-def _build_messages(image: Image.Image | None, prompt: str) -> list[Dict[str, Any]]:
-    content = []
-    if image is not None:
-        content.append({"type": "image", "image": image})
-    if prompt.strip():
-        content.append({"type": "text", "text": prompt.strip()})
-    return [{"role": "user", "content": content}]
-
-
-def _build_text_messages(prompt: str) -> list[Dict[str, str]]:
-    return [{"role": "user", "content": prompt.strip()}]
-
-
-def _apply_chat_template(chat_handler: Any, messages: list[Dict[str, Any]], think: bool) -> Dict[str, Any]:
-    template_kwargs = dict(
-        tokenize=True,
-        add_generation_prompt=True,
-        return_dict=True,
-        return_tensors="pt",
-    )
-    if _supports_enable_thinking(chat_handler):
-        template_kwargs["enable_thinking"] = think
-
-    try:
-        return chat_handler.apply_chat_template(messages, **template_kwargs)
-    except TypeError:
-        template_kwargs.pop("enable_thinking", None)
-        return chat_handler.apply_chat_template(messages, **template_kwargs)
-
-
-def _supports_enable_thinking(chat_handler: Any) -> bool:
-    template = getattr(chat_handler, "chat_template", None)
-    if template is None:
-        tokenizer = getattr(chat_handler, "tokenizer", None)
-        template = getattr(tokenizer, "chat_template", None)
-    return isinstance(template, str) and "enable_thinking" in template
-
-
-def _prepare_text_inputs(tokenizer: Any, prompt: str, think: bool) -> Dict[str, Any]:
-    if hasattr(tokenizer, "apply_chat_template"):
-        return _apply_chat_template(tokenizer, _build_text_messages(prompt), think)
-    return tokenizer(prompt.strip(), return_tensors="pt")
-
-
-def _prepare_inputs(
-    processor: Any | None,
-    tokenizer: Any,
-    image: Any | None,
-    prompt: str,
-    resize_to: int,
-    think: bool,
-) -> Dict[str, Any]:
-    pil_image = None
-    if image is not None:
-        if processor is None:
-            raise RuntimeError("This model does not provide a processor, so image input is not supported.")
-        pil_image = _ensure_pil_image(image)
-        pil_image = _resize_to_limit(pil_image, resize_to)
-
-    if pil_image is not None:
-        inputs = _apply_chat_template(processor, _build_messages(pil_image, prompt), think)
-    else:
-        inputs = _prepare_text_inputs(tokenizer, prompt, think)
-    inputs.pop("token_type_ids", None)
-
-    if _DEVICE:
-        inputs = {k: v.to(_DEVICE) for k, v in inputs.items()}
-    return inputs
-
-
-def _apply_seed(seed: int) -> None:
-    if torch is None or seed < 0:
-        return
-
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-
-def _generate_text(tokenizer: Any, model: Any, inputs: Dict[str, Any], seed: int, max_new_tokens: int) -> str:
-    gen_kwargs = dict(max_new_tokens=max_new_tokens, temperature=0.7, top_p=0.95, use_cache=True, do_sample=True)
-    _apply_seed(seed)
-    with torch.no_grad(), torch.inference_mode():
-        if GenerationConfig:
-            gen_config = GenerationConfig(**gen_kwargs)
-            output = model.generate(**inputs, generation_config=gen_config)
-        else:
-            output = model.generate(**inputs, **gen_kwargs)
-
-    input_ids = inputs["input_ids"]
-    trimmed = [sequence[input_ids.shape[1] :] for sequence in output]
-    return tokenizer.batch_decode(trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=True)[0].strip()
+def _load_selected_model(model_name: str):
+    model_path = _resolve_selected_model_path(model_name)
+    backend = _select_backend(model_path)
+    return backend, backend.load(model_path)
 
 
 def _extract_caption(full_output: str, think: bool) -> str:
@@ -464,19 +157,37 @@ def _build_improver_prompt(
         parts.append(f"ORIGINAL PROMPT:\n{original_prompt}\n\n")
     parts.append(f"TASK: Write one improved image-generation prompt{based_on_suffix}.\n\n")
     parts.append("GOAL:\n")
-    parts.append("Rewrite the input into a clear, vivid, compact prompt while preserving the intended meaning and important details.\n\n")
+    parts.append(
+        "Rewrite the input into a clear, vivid, compact prompt while preserving the intended meaning and important details.\n\n"
+    )
     parts.append("INSTRUCTIONS:\n")
     if original_prompt and has_image:
         if style_source_mode == IMPROVER_STYLE_SOURCE_MODES[0]:
-            parts.append("Primary source for subjects, actions, composition, objects, attributes, and scene details: original prompt.\n")
-            parts.append("Secondary source for style, color palette, lighting, texture, mood, and rendering look: attached image.\n")
-            parts.append("Do not remove, replace, or reinterpret important content details from the original prompt because of the image.\n")
-            parts.append("If the original prompt and image conflict, keep the subjects and semantic content from the original prompt.\n")
+            parts.append(
+                "Primary source for subjects, actions, composition, objects, attributes, and scene details: original prompt.\n"
+            )
+            parts.append(
+                "Secondary source for style, color palette, lighting, texture, mood, and rendering look: attached image.\n"
+            )
+            parts.append(
+                "Do not remove, replace, or reinterpret important content details from the original prompt because of the image.\n"
+            )
+            parts.append(
+                "If the original prompt and image conflict, keep the subjects and semantic content from the original prompt.\n"
+            )
         elif style_source_mode == IMPROVER_STYLE_SOURCE_MODES[1]:
-            parts.append("Primary source for subjects, actions, composition, objects, attributes, and scene details: attached image.\n")
-            parts.append("Secondary source for style wording, mood, artistic direction, and stylistic cues: original prompt.\n")
-            parts.append("Do not overwrite the main visual content from the image with conflicting content from the original prompt.\n")
-            parts.append("If the original prompt and image conflict, keep the subjects and semantic content from the image.\n")
+            parts.append(
+                "Primary source for subjects, actions, composition, objects, attributes, and scene details: attached image.\n"
+            )
+            parts.append(
+                "Secondary source for style wording, mood, artistic direction, and stylistic cues: original prompt.\n"
+            )
+            parts.append(
+                "Do not overwrite the main visual content from the image with conflicting content from the original prompt.\n"
+            )
+            parts.append(
+                "If the original prompt and image conflict, keep the subjects and semantic content from the image.\n"
+            )
         else:
             parts.append("Merge the subjects, scene details, and style cues from both the original prompt and the attached image.\n")
             parts.append("Keep all important non-conflicting details from both sources.\n")
@@ -503,7 +214,13 @@ class CaptionatorQwen35:
         return {
             "required": {
                 "model": (_list_qwen35_models(),),
-                "prompt": ("STRING", {"default": "Write a clear and detailed description of the given image in one concise paragraph (maximum 200 words). Focus on key visual elements such as main subjects, their appearance, positions, actions, environment, lighting, colors, mood, and any notable details. Avoid speculation or assumptions beyond what is visible. Use precise, descriptive language while keeping the text compact and well-structured.", "multiline": True}),
+                "prompt": (
+                    "STRING",
+                    {
+                        "default": "Write a clear and detailed description of the given image in one concise paragraph (maximum 200 words). Focus on key visual elements such as main subjects, their appearance, positions, actions, environment, lighting, colors, mood, and any notable details. Avoid speculation or assumptions beyond what is visible. Use precise, descriptive language while keeping the text compact and well-structured.",
+                        "multiline": True,
+                    },
+                ),
                 "resize_to": ("INT", {"default": 0, "min": 0, "max": 4096, "step": IMAGE_FACTOR}),
                 "max_new_tokens": ("INT", {"default": 256, "min": 1, "max": 8192, "step": 1}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0x7FFFFFFFFFFFFFFF}),
@@ -521,19 +238,26 @@ class CaptionatorQwen35:
 
     def run(self, model, prompt, resize_to, max_new_tokens, seed, think, image=None):
         try:
-            model_path = _resolve_selected_model_path(model)
-            processor, tokenizer, llm = _ensure_model(model_path)
+            backend, loaded_model = _load_selected_model(model)
         except Exception as exc:
             logging.exception("Failed to load qwen model", exc_info=exc)
             message = f"Model load failed: {exc}"
             return (message, message)
 
+        request = GenerationRequest(
+            prompt=prompt,
+            image=image,
+            resize_to=resize_to,
+            max_new_tokens=max_new_tokens,
+            seed=seed,
+            think=think,
+        )
         try:
-            inputs = _prepare_inputs(processor, tokenizer, image, prompt, resize_to, think)
-            full_output = _generate_text(tokenizer, llm, inputs, seed, max_new_tokens)
+            full_output = backend.generate(loaded_model, request).full_output
         except Exception as exc:
             logging.exception("Inference failure", exc_info=exc)
-            return (f"Inference failed: {exc}", f"Inference failed: {exc}")
+            message = f"Inference failed: {exc}"
+            return (message, message)
 
         caption = _extract_caption(full_output, think)
         return (caption, full_output.strip())
@@ -571,16 +295,22 @@ class CaptionImproverQwen35:
 
         instruction = _build_improver_prompt(original_prompt, has_image, max_new_tokens, style_source_mode)
         try:
-            model_path = _resolve_selected_model_path(model)
-            processor, tokenizer, llm = _ensure_model(model_path)
+            backend, loaded_model = _load_selected_model(model)
         except Exception as exc:
             logging.exception("Failed to load qwen model", exc_info=exc)
             message = f"Model load failed: {exc}"
             return (message, message, instruction)
 
+        request = GenerationRequest(
+            prompt=instruction,
+            image=image,
+            resize_to=resize_to,
+            max_new_tokens=max_new_tokens,
+            seed=seed,
+            think=think,
+        )
         try:
-            inputs = _prepare_inputs(processor, tokenizer, image, instruction, resize_to, think)
-            full_output = _generate_text(tokenizer, llm, inputs, seed, max_new_tokens)
+            full_output = backend.generate(loaded_model, request).full_output
         except Exception as exc:
             logging.exception("Inference failure", exc_info=exc)
             message = f"Inference failed: {exc}"

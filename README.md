@@ -110,3 +110,7 @@ python -m unittest discover -s tests -v
 
 The tests use a mocked `folder_paths` module and do not perform model inference or downloads.
 GitHub Actions runs the same suite for Python 3.10, 3.12, and 3.13 on every push and pull request.
+
+The ComfyUI node layer is separated from model inference through a small backend contract. The current
+`TransformersBackend` owns model loading, preprocessing, generation, and its model cache; this boundary is
+intended to allow additional model formats without duplicating the node UI and prompt-building logic.
